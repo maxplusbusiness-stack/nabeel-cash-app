@@ -82,7 +82,7 @@ function exportProExcel(transactions: Transaction[], persons: Person[], openingC
   // ── Category Summary ──
   sep('CATEGORY BREAKDOWN')
   row(['Category', 'Transactions', 'Total Given (AED)', 'Total Spent (AED)', 'Total Returned (AED)', '', '', ''])
-  const cats = [...new Set(filtered.map(t => t.category || 'General'))]
+  const cats = Array.from(new Set(filtered.map(t => t.category || 'General')))
   cats.forEach(cat => {
     const txs = filtered.filter(t => (t.category || 'General') === cat)
     const g = txs.reduce((s, t) => s + (t.given_out || 0), 0)
