@@ -17,54 +17,58 @@ type Transaction = {
 }
 type Settings = { opening_cash: number }
 
-const CATEGORIES = ['General', 'Transport', 'Customs & Clearance', 'Office Supplies', 'Utilities', 'Courier / Shipping', 'Food & Refreshments', 'Maintenance', 'Other']
+// ── Form has its own type so boolean settled doesn't conflict ──
+type TxForm = {
+  date: string
+  description: string
+  person_id: string
+  category: string
+  given_out: string
+  spent_by_person: string
+  returned: string
+  settled: boolean
+}
 
+const CATEGORIES = ['General', 'Transport', 'Customs & Clearance', 'Office Supplies', 'Utilities', 'Courier / Shipping', 'Food & Refreshments', 'Maintenance', 'Other']
 const fmt = (n: number) => n.toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const today = () => new Date().toISOString().slice(0, 10)
+const emptyForm = (): TxForm => ({ date: today(), description: '', person_id: '', category: 'General', given_out: '', spent_by_person: '', returned: '', settled: false })
 
-// ── PRO EXCEL EXPORT ──────────────────────────────────────────────────────────
+// ── PRO EXCEL EXPORT ──────────────────────────────────────────
 function exportProExcel(transactions: Transaction[], persons: Person[], openingCash: number, filterPerson: string, filterCat: string, filterStatus: string) {
   const filtered = transactions.filter(tx => {
     if (filterPerson && tx.person_id !== filterPerson) return false
-    if (filterCat && tx.category !== filterCat) return false
+    if (filterCat && (tx.category || 'General') !== filterCat) return false
     if (filterStatus === 'settled' && !tx.settled) return false
     if (filterStatus === 'outstanding' && tx.settled) return false
     return true
   })
 
-  const totalGiven = filtered.reduce((s, t) => s + (t.given_out || 0), 0)
-  const totalSpent = filtered.reduce((s, t) => s + (t.spent_by_person || 0), 0)
-  const totalReturned = filtered.reduce((s, t) => s + (t.returned || 0), 0)
-  const cashInHand = openingCash - transactions.reduce((s, t) => s + (t.given_out || 0), 0) + transactions.reduce((s, t) => s + (t.returned || 0), 0)
+  const totalGivenAll = transactions.reduce((s, t) => s + (t.given_out || 0), 0)
+  const totalReturnedAll = transactions.reduce((s, t) => s + (t.returned || 0), 0)
+  const cashInHand = openingCash - totalGivenAll + totalReturnedAll
 
   const lines: string[] = []
   const row = (cols: string[]) => lines.push(cols.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','))
   const blank = () => lines.push('')
-  const sep = (title: string) => { blank(); row([`── ${title} ──`, '', '', '', '', '', '', '']); }
+  const sep = (title: string) => { blank(); row([`── ${title} ──`, '', '', '', '', '', '', '']) }
 
-  // ── Title block ──
   row(['NABEEL — PETTY CASH MANAGER', '', '', '', '', '', '', ''])
   row([`Report Date: ${new Date().toLocaleDateString('en-AE')}`, '', '', '', '', '', '', ''])
-  if (filterPerson) {
-    const pName = persons.find(p => p.id === filterPerson)?.name || filterPerson
-    row([`Filter: ${pName}`, '', '', '', '', '', '', ''])
-  }
-  if (filterCat) row([`Category: ${filterCat}`, '', '', '', '', '', '', ''])
-  if (filterStatus) row([`Status: ${filterStatus === 'settled' ? 'Settled only' : 'Outstanding only'}`, '', '', '', '', '', '', ''])
+  if (filterPerson) row([`Person Filter: ${persons.find(p => p.id === filterPerson)?.name || ''}`, '', '', '', '', '', '', ''])
+  if (filterCat) row([`Category Filter: ${filterCat}`, '', '', '', '', '', '', ''])
+  if (filterStatus) row([`Status Filter: ${filterStatus === 'settled' ? 'Settled only' : 'Outstanding only'}`, '', '', '', '', '', '', ''])
   blank()
 
-  // ── Summary ──
   sep('SUMMARY')
   row(['Opening Cash (AED)', '', fmt(openingCash), '', '', '', '', ''])
   row(['Cash In Hand (AED)', '', fmt(cashInHand), '', '', '', '', ''])
-  row(['Total Given Out (AED)', '', fmt(totalGiven), '', '', '', '', ''])
-  row(['Total Spent by Persons (AED)', '', fmt(totalSpent), '', '', '', '', ''])
-  row(['Total Returned (AED)', '', fmt(totalReturned), '', '', '', '', ''])
-  row(['Net Spent (AED)', '', fmt(totalGiven - totalReturned), '', '', '', '', ''])
-  row([`Transactions Shown`, '', String(filtered.length), '', '', '', '', ''])
+  row(['Total Given Out (AED)', '', fmt(filtered.reduce((s, t) => s + (t.given_out || 0), 0)), '', '', '', '', ''])
+  row(['Total Spent by Persons (AED)', '', fmt(filtered.reduce((s, t) => s + (t.spent_by_person || 0), 0)), '', '', '', '', ''])
+  row(['Total Returned (AED)', '', fmt(filtered.reduce((s, t) => s + (t.returned || 0), 0)), '', '', '', '', ''])
+  row(['Transactions Shown', '', String(filtered.length), '', '', '', '', ''])
   blank()
 
-  // ── Per-Person Summary ──
   sep('PER-PERSON SUMMARY')
   row(['Person', 'Total Given (AED)', 'Total Spent (AED)', 'Total Returned (AED)', 'Still Holding (AED)', 'Status', '', ''])
   persons.forEach(p => {
@@ -73,13 +77,10 @@ function exportProExcel(transactions: Transaction[], persons: Person[], openingC
     const sp = txs.reduce((s, t) => s + (t.spent_by_person || 0), 0)
     const r = txs.reduce((s, t) => s + (t.returned || 0), 0)
     const holding = g - sp - r
-    if (g > 0 || sp > 0 || r > 0) {
-      row([p.name, fmt(g), fmt(sp), fmt(r), fmt(holding), holding <= 0 ? 'SETTLED' : 'OUTSTANDING', '', ''])
-    }
+    if (g > 0 || sp > 0 || r > 0) row([p.name, fmt(g), fmt(sp), fmt(r), fmt(holding), holding <= 0 ? 'SETTLED' : 'OUTSTANDING', '', ''])
   })
   blank()
 
-  // ── Category Summary ──
   sep('CATEGORY BREAKDOWN')
   row(['Category', 'Transactions', 'Total Given (AED)', 'Total Spent (AED)', 'Total Returned (AED)', '', '', ''])
   const cats = Array.from(new Set(filtered.map(t => t.category || 'General')))
@@ -92,33 +93,19 @@ function exportProExcel(transactions: Transaction[], persons: Person[], openingC
   })
   blank()
 
-  // ── Transaction Detail ──
   sep('TRANSACTION DETAIL')
   row(['#', 'Date', 'Description', 'Person', 'Category', 'Given Out (AED)', 'Spent By Person (AED)', 'Returned (AED)', 'Balance Effect (AED)', 'Status'])
-  let runningBalance = openingCash
-  const allSorted = [...transactions].sort((a, b) => a.date.localeCompare(b.date))
   let rowNum = 1
+  const allSorted = [...transactions].sort((a, b) => a.date.localeCompare(b.date))
   allSorted.forEach(tx => {
-    const inFiltered = filtered.find(f => f.id === tx.id)
-    runningBalance = runningBalance - (tx.given_out || 0) + (tx.returned || 0)
-    if (!inFiltered) return
+    if (!filtered.find(f => f.id === tx.id)) return
     const effect = -(tx.given_out || 0) + (tx.returned || 0)
-    row([
-      String(rowNum++),
-      tx.date,
-      tx.description,
-      tx.persons?.name || '—',
-      tx.category || 'General',
-      tx.given_out > 0 ? fmt(tx.given_out) : '',
-      tx.spent_by_person > 0 ? fmt(tx.spent_by_person) : '',
-      tx.returned > 0 ? fmt(tx.returned) : '',
-      fmt(effect),
-      tx.settled ? 'SETTLED' : 'OUTSTANDING',
-    ])
+    row([String(rowNum++), tx.date, tx.description, tx.persons?.name || '—', tx.category || 'General',
+      tx.given_out > 0 ? fmt(tx.given_out) : '', tx.spent_by_person > 0 ? fmt(tx.spent_by_person) : '',
+      tx.returned > 0 ? fmt(tx.returned) : '', fmt(effect), tx.settled ? 'SETTLED' : 'OUTSTANDING'])
   })
 
-  const csv = lines.join('\n')
-  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
+  const blob = new Blob(['\uFEFF' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -138,13 +125,11 @@ export default function App() {
   const [editTx, setEditTx] = useState<Transaction | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [newPerson, setNewPerson] = useState('')
-  const [form, setForm] = useState({ date: today(), description: '', person_id: '', category: 'General', given_out: '', spent_by_person: '', returned: '', settled: false })
+  const [form, setForm] = useState<TxForm>(emptyForm())
   const [openingInput, setOpeningInput] = useState('')
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
   const [invoiceTx, setInvoiceTx] = useState<Transaction | null>(null)
-
-  // Filters
   const [filterPerson, setFilterPerson] = useState('')
   const [filterCat, setFilterCat] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
@@ -206,14 +191,12 @@ export default function App() {
       await fetch('/api/transactions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       toast('Added ✓')
     }
-    setForm({ date: today(), description: '', person_id: '', category: 'General', given_out: '', spent_by_person: '', returned: '', settled: false })
-    setShowForm(false); setEditTx(null); setSaving(false); load()
+    setForm(emptyForm()); setShowForm(false); setEditTx(null); setSaving(false); load()
   }
 
   const toggleSettled = async (tx: Transaction) => {
     await fetch('/api/transactions', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: tx.id, settled: !tx.settled }) })
-    toast(tx.settled ? 'Marked outstanding' : 'Marked settled ✓')
-    load()
+    toast(tx.settled ? 'Marked outstanding' : 'Marked settled ✓'); load()
   }
 
   const deleteTx = async (id: string) => {
@@ -252,7 +235,7 @@ export default function App() {
     setShowSettings(false); toast('Saved ✓'); load()
   }
 
-  // ── Styles ──────────────────────────────────────────────────────────────
+  // ── Style helpers ──────────────────────────────────────────
   const navBtn = (active: boolean): React.CSSProperties => ({
     flex: 1, padding: '13px 4px', background: 'none', border: 'none',
     borderBottom: active ? '3px solid #c9a84c' : '3px solid transparent',
@@ -276,7 +259,6 @@ export default function App() {
     border: '1px solid #e8e0d0', borderRadius: 8, padding: '10px 12px',
     fontSize: 14, width: '100%', outline: 'none', fontFamily: 'inherit', background: '#fff', color: '#2d3a2d',
   }
-  const selectStyle: React.CSSProperties = { ...inputStyle, background: '#fff' }
   const lbl: React.CSSProperties = {
     fontSize: 11, color: '#8a7a5a', fontWeight: 600,
     textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 5,
@@ -285,24 +267,18 @@ export default function App() {
   const modalOverlay: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 100 }
   const sheet: React.CSSProperties = { background: '#fff', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 700, padding: '24px 20px 36px', maxHeight: '92vh', overflowY: 'auto' }
   const saveBtn: React.CSSProperties = { background: '#1a2a1a', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 15, width: '100%', cursor: 'pointer' }
-  const filterSelect: React.CSSProperties = { border: '1px solid #e8e0d0', borderRadius: 8, padding: '7px 10px', fontSize: 13, outline: 'none', fontFamily: 'inherit', background: '#fff', color: '#2d3a2d', cursor: 'pointer' }
+  const filterSelect: React.CSSProperties = { border: '1px solid #e8e0d0', borderRadius: 8, padding: '7px 10px', fontSize: 13, outline: 'none', fontFamily: 'inherit', background: '#fff', color: '#2d3a2d', cursor: 'pointer', width: '100%' }
   const catColor: Record<string, { bg: string; color: string }> = {
-    'General': { bg: '#f0f0f0', color: '#555' },
-    'Transport': { bg: '#e8f4ff', color: '#1a5f8a' },
-    'Customs & Clearance': { bg: '#fff0e8', color: '#8a3a1a' },
-    'Office Supplies': { bg: '#f0e8ff', color: '#5a1a8a' },
-    'Utilities': { bg: '#e8fff0', color: '#1a7a3c' },
-    'Courier / Shipping': { bg: '#fff8e8', color: '#8a6a1a' },
-    'Food & Refreshments': { bg: '#ffe8f0', color: '#8a1a4a' },
-    'Maintenance': { bg: '#e8f8ff', color: '#1a5a7a' },
+    'General': { bg: '#f0f0f0', color: '#555' }, 'Transport': { bg: '#e8f4ff', color: '#1a5f8a' },
+    'Customs & Clearance': { bg: '#fff0e8', color: '#8a3a1a' }, 'Office Supplies': { bg: '#f0e8ff', color: '#5a1a8a' },
+    'Utilities': { bg: '#e8fff0', color: '#1a7a3c' }, 'Courier / Shipping': { bg: '#fff8e8', color: '#8a6a1a' },
+    'Food & Refreshments': { bg: '#ffe8f0', color: '#8a1a4a' }, 'Maintenance': { bg: '#e8f8ff', color: '#1a5a7a' },
     'Other': { bg: '#f5f5f5', color: '#666' },
   }
   const getCatStyle = (cat: string): React.CSSProperties => ({
     fontSize: 11, padding: '2px 8px', borderRadius: 20, fontWeight: 600,
-    background: catColor[cat]?.bg || '#f0f0f0',
-    color: catColor[cat]?.color || '#555',
+    background: catColor[cat]?.bg || '#f0f0f0', color: catColor[cat]?.color || '#555',
   })
-
   const activeFilters = [filterPerson, filterCat, filterStatus].filter(Boolean).length
 
   if (loading) return (
@@ -314,7 +290,7 @@ export default function App() {
 
   return (
     <>
-      {/* ── HEADER ── */}
+      {/* HEADER */}
       <div style={{ background: '#1a2a1a' }}>
         <div style={{ maxWidth: 700, margin: '0 auto', padding: '18px 16px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
@@ -339,10 +315,10 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── BODY ── */}
+      {/* BODY */}
       <div style={{ maxWidth: 700, margin: '0 auto', padding: '18px 14px 100px', background: '#f7f4ee', minHeight: 'calc(100vh - 170px)' }}>
 
-        {/* ── DASHBOARD ── */}
+        {/* DASHBOARD */}
         {view === 'dashboard' && (
           <>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
@@ -372,9 +348,7 @@ export default function App() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ fontWeight: 600, fontSize: 14, color: '#2d3a2d' }}>{p.name}</span>
                       <button style={{ ...btnSm('#eef0ff', '#3d5af1'), fontSize: 11, padding: '2px 8px' }}
-                        onClick={() => { setFilterPerson(p.id); setView('transactions') }}>
-                        View →
-                      </button>
+                        onClick={() => { setFilterPerson(p.id); setView('transactions') }}>View →</button>
                     </div>
                     <div style={{ fontSize: 12, color: '#8a7a5a', marginTop: 2 }}>Given: AED {fmt(p.given)} · Spent: AED {fmt(p.spent)}</div>
                   </div>
@@ -392,22 +366,16 @@ export default function App() {
           </>
         )}
 
-        {/* ── TRANSACTIONS ── */}
+        {/* TRANSACTIONS */}
         {view === 'transactions' && (
           <>
-            {/* Top bar */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <span style={{ fontWeight: 700, fontSize: 16, color: '#2d3a2d' }}>
-                Transactions
-                <span style={{ fontSize: 13, color: '#8a7a5a', fontWeight: 400, marginLeft: 6 }}>({filtered.length}{filtered.length !== transactions.length ? ` of ${transactions.length}` : ''})</span>
+                Transactions <span style={{ fontSize: 13, color: '#8a7a5a', fontWeight: 400 }}>({filtered.length}{filtered.length !== transactions.length ? ` of ${transactions.length}` : ''})</span>
               </span>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button style={btnSm('#2d4a2d')} onClick={() => exportProExcel(transactions, persons, settings.opening_cash, filterPerson, filterCat, filterStatus)}>
-                  ⬇ Excel
-                </button>
-                <button style={btnSm('#c9a84c', '#1a1a0a')} onClick={() => { setEditTx(null); setForm({ date: today(), description: '', person_id: '', category: 'General', given_out: '', spent_by_person: '', returned: '', settled: false }); setShowForm(true) }}>
-                  + Add
-                </button>
+                <button style={btnSm('#2d4a2d')} onClick={() => exportProExcel(transactions, persons, settings.opening_cash, filterPerson, filterCat, filterStatus)}>⬇ Excel</button>
+                <button style={btnSm('#c9a84c', '#1a1a0a')} onClick={() => { setEditTx(null); setForm(emptyForm()); setShowForm(true) }}>+ Add</button>
               </div>
             </div>
 
@@ -415,15 +383,8 @@ export default function App() {
             <div style={{ background: '#fff', border: '1px solid #e8e0d0', borderRadius: 10, padding: '12px 14px', marginBottom: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
                 <span style={{ fontSize: 12, fontWeight: 600, color: '#8a7a5a', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Filter</span>
-                {activeFilters > 0 && (
-                  <span style={{ fontSize: 11, background: '#c9a84c', color: '#1a1a0a', borderRadius: 20, padding: '1px 7px', fontWeight: 700 }}>{activeFilters}</span>
-                )}
-                {activeFilters > 0 && (
-                  <button onClick={() => { setFilterPerson(''); setFilterCat(''); setFilterStatus('') }}
-                    style={{ fontSize: 11, color: '#b83232', background: 'none', border: 'none', cursor: 'pointer', marginLeft: 'auto', fontWeight: 500 }}>
-                    Clear all
-                  </button>
-                )}
+                {activeFilters > 0 && <span style={{ fontSize: 11, background: '#c9a84c', color: '#1a1a0a', borderRadius: 20, padding: '1px 7px', fontWeight: 700 }}>{activeFilters}</span>}
+                {activeFilters > 0 && <button onClick={() => { setFilterPerson(''); setFilterCat(''); setFilterStatus('') }} style={{ fontSize: 11, color: '#b83232', background: 'none', border: 'none', cursor: 'pointer', marginLeft: 'auto', fontWeight: 500 }}>Clear all</button>}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
                 <div>
@@ -451,17 +412,13 @@ export default function App() {
               </div>
             </div>
 
-            {/* Filter summary strip */}
             {activeFilters > 0 && (
               <div style={{ background: '#fef9e7', border: '1px solid #f0d060', borderRadius: 8, padding: '8px 14px', marginBottom: 12, fontSize: 13, color: '#856404', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>
-                  Showing: {filterPerson ? <strong>{persons.find(p => p.id === filterPerson)?.name}</strong> : ''}{filterPerson && filterCat ? ' · ' : ''}{filterCat ? <strong>{filterCat}</strong> : ''}{(filterPerson || filterCat) && filterStatus ? ' · ' : ''}{filterStatus ? <strong>{filterStatus === 'settled' ? 'Settled' : 'Outstanding'}</strong> : ''}
-                </span>
+                <span>Filtered view active</span>
                 <span style={{ fontWeight: 700 }}>AED {fmt(filtered.reduce((s, t) => s + (t.given_out || 0), 0))} given</span>
               </div>
             )}
 
-            {/* Transaction list */}
             {filtered.length === 0 ? (
               <div style={{ ...card, textAlign: 'center', padding: '40px 20px', color: '#8a7a5a' }}>
                 <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
@@ -484,11 +441,9 @@ export default function App() {
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: 5, flexShrink: 0, alignItems: 'center' }}>
-                        <button
-                          title={tx.settled ? 'Mark outstanding' : 'Mark settled'}
+                        <button title={tx.settled ? 'Mark outstanding' : 'Mark settled'}
                           style={{ ...btnSm(tx.settled ? '#d5f5e3' : '#f0f0f0', tx.settled ? '#1a7a3c' : '#555'), fontSize: 14, padding: '4px 8px' }}
-                          onClick={() => toggleSettled(tx)}
-                        >{tx.settled ? '✓' : '○'}</button>
+                          onClick={() => toggleSettled(tx)}>{tx.settled ? '✓' : '○'}</button>
                         <button style={btnSm('#fef9e7', '#856404')} onClick={() => setInvoiceTx(tx)} title="Send Invoice">📄</button>
                         <button style={btnSm('#eef0ff', '#3d5af1')} onClick={() => openEdit(tx)}>Edit</button>
                         <button style={btnSm('#fff0f0', '#b83232')} onClick={() => deleteTx(tx.id)}>Del</button>
@@ -504,27 +459,24 @@ export default function App() {
               </div>
             )}
 
-            {/* Filtered totals footer */}
             {filtered.length > 0 && (
               <div style={{ background: '#1a2a1a', borderRadius: 10, padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, textAlign: 'center' }}>
-                <div>
-                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Given</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: '#ff9a9a', marginTop: 2 }}>AED {fmt(filtered.reduce((s, t) => s + (t.given_out || 0), 0))}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Spent</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: '#ffd97a', marginTop: 2 }}>AED {fmt(filtered.reduce((s, t) => s + (t.spent_by_person || 0), 0))}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Returned</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: '#7affc0', marginTop: 2 }}>AED {fmt(filtered.reduce((s, t) => s + (t.returned || 0), 0))}</div>
-                </div>
+                {[
+                  { label: 'Given', value: filtered.reduce((s, t) => s + (t.given_out || 0), 0), color: '#ff9a9a' },
+                  { label: 'Spent', value: filtered.reduce((s, t) => s + (t.spent_by_person || 0), 0), color: '#ffd97a' },
+                  { label: 'Returned', value: filtered.reduce((s, t) => s + (t.returned || 0), 0), color: '#7affc0' },
+                ].map(s => (
+                  <div key={s.label}>
+                    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{s.label}</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: s.color, marginTop: 2 }}>AED {fmt(s.value)}</div>
+                  </div>
+                ))}
               </div>
             )}
           </>
         )}
 
-        {/* ── PERSONS ── */}
+        {/* PERSONS */}
         {view === 'persons' && (
           <>
             <div style={{ fontWeight: 700, fontSize: 16, color: '#2d3a2d', marginBottom: 14 }}>Manage People</div>
@@ -562,7 +514,7 @@ export default function App() {
         )}
       </div>
 
-      {/* ── ADD / EDIT MODAL ── */}
+      {/* ADD / EDIT MODAL */}
       {showForm && (
         <div style={modalOverlay} onClick={e => { if (e.target === e.currentTarget) { setShowForm(false); setEditTx(null) } }}>
           <div style={sheet}>
@@ -574,20 +526,25 @@ export default function App() {
               <button onClick={() => { setShowForm(false); setEditTx(null) }} style={{ background: '#f0ebe0', border: 'none', borderRadius: '50%', width: 34, height: 34, fontSize: 20, color: '#8a7a5a', cursor: 'pointer' }}>×</button>
             </div>
 
-            <div style={{ marginBottom: 14 }}><label style={lbl}>Date</label><input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} style={inputStyle} /></div>
-            <div style={{ marginBottom: 14 }}><label style={lbl}>Description *</label><input placeholder="e.g. Cash handover to Sameer" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} style={inputStyle} /></div>
-
+            <div style={{ marginBottom: 14 }}>
+              <label style={lbl}>Date</label>
+              <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} style={inputStyle} />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={lbl}>Description *</label>
+              <input placeholder="e.g. Cash handover to Sameer" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} style={inputStyle} />
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
               <div>
                 <label style={lbl}>Person</label>
-                <select value={form.person_id} onChange={e => setForm(f => ({ ...f, person_id: e.target.value }))} style={selectStyle}>
+                <select value={form.person_id} onChange={e => setForm(f => ({ ...f, person_id: e.target.value }))} style={{ ...inputStyle, background: '#fff' }}>
                   <option value="">— Select —</option>
                   {persons.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </div>
               <div>
                 <label style={lbl}>Category</label>
-                <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} style={selectStyle}>
+                <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} style={{ ...inputStyle, background: '#fff' }}>
                   {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
@@ -596,15 +553,16 @@ export default function App() {
             <div style={{ marginBottom: 16 }}>
               <label style={lbl}>Amounts (AED) — fill only what applies</label>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-                {[
-                  { label: 'Given Out', key: 'given_out', bg: '#fff0f0' },
-                  { label: 'Spent by Person', key: 'spent_by_person', bg: '#fef9e7' },
-                  { label: 'Returned', key: 'returned', bg: '#eafaf1' },
-                ].map(f => (
+                {([
+                  { label: 'Given Out', key: 'given_out' as const, bg: '#fff0f0' },
+                  { label: 'Spent by Person', key: 'spent_by_person' as const, bg: '#fef9e7' },
+                  { label: 'Returned', key: 'returned' as const, bg: '#eafaf1' },
+                ]).map(f => (
                   <div key={f.key} style={{ background: f.bg, borderRadius: 8, padding: '8px 10px' }}>
                     <div style={{ fontSize: 11, color: '#555', fontWeight: 600, marginBottom: 5 }}>{f.label}</div>
-                    <input type="number" min="0" placeholder="0"
-                      value={(form as Record<string, string>)[f.key]}
+                    <input
+                      type="number" min="0" placeholder="0"
+                      value={form[f.key]}
                       onChange={e => setForm(prev => ({ ...prev, [f.key]: e.target.value }))}
                       style={{ border: '1px solid rgba(0,0,0,0.12)', borderRadius: 6, padding: '6px 8px', fontSize: 14, width: '100%', outline: 'none', fontFamily: 'inherit', background: 'rgba(255,255,255,0.75)', color: '#2d3a2d' }}
                     />
@@ -635,7 +593,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── SETTINGS MODAL ── */}
+      {/* SETTINGS MODAL */}
       {showSettings && (
         <div style={modalOverlay} onClick={e => { if (e.target === e.currentTarget) setShowSettings(false) }}>
           <div style={sheet}>
@@ -652,17 +610,12 @@ export default function App() {
         </div>
       )}
 
-      {/* ── INVOICE MODAL ── */}
+      {/* INVOICE MODAL */}
       {invoiceTx && (
-        <Invoice
-          tx={invoiceTx}
-          allTransactions={transactions}
-          openingCash={settings.opening_cash}
-          onClose={() => setInvoiceTx(null)}
-        />
+        <Invoice tx={invoiceTx} allTransactions={transactions} openingCash={settings.opening_cash} onClose={() => setInvoiceTx(null)} />
       )}
 
-      {/* ── TOAST ── */}
+      {/* TOAST */}
       {msg && (
         <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: '#2d4a2d', color: '#fff', padding: '11px 22px', borderRadius: 24, fontSize: 14, fontWeight: 500, zIndex: 200, whiteSpace: 'nowrap' }}>
           {msg}
