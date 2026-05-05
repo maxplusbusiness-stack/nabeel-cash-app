@@ -671,5 +671,3 @@ export default function App() {
     </>
   )
 }
-
-
